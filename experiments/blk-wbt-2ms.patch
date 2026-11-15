@@ -1,0 +1,30 @@
+block: wbt: 2 ms write-back latency target on every disk
+
+Write-back throttling aims at 2 ms of latency on a non-rotating disk
+and 75 ms on a rotating one. Use 2 ms for both.
+
+To measure ALONE, never in the batch with the three mq-deadline and
+rq_affinity experiments. It is the one of the four that can make things
+worse on the hardware Raye cares about: it asks a hard disk, whose
+seeks take milliseconds, to meet a target set for flash, and the way
+wbt meets a target it cannot reach is by holding writes back. A gain on
+an SSD and a loss on a hard disk would cancel out in a batch
+measurement and neither would be seen.
+
+From XanMod's 7.0 series.
+
+--- a/block/blk-wbt.c
++++ b/block/blk-wbt.c
+@@ -797,12 +797,7 @@
+ 
+ static u64 wbt_default_latency_nsec(struct request_queue *q)
+ {
+-	/*
+-	 * We default to 2msec for non-rotational storage, and 75msec
+-	 * for rotational storage.
+-	 */
+-	if (blk_queue_rot(q))
+-		return 75000000ULL;
++	/* XanMod defaults to 2msec for any type of storage */
+ 	return 2000000ULL;
+ }

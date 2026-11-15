@@ -1,0 +1,22 @@
+block: mq-deadline: let writes wait one second, not five
+
+mq-deadline's soft deadline for a write drops from 5*HZ to HZ, so a
+write waits at most a second behind reads. A desktop that writes while
+it reads should stall less; reads give up ground in exchange.
+
+Ubuntu's generic kernel uses mq-deadline for rotating disks and none
+for NVMe, so this is a change for hard disks and SATA SSDs.
+
+From XanMod's 7.0 series.
+
+--- a/block/mq-deadline.c
++++ b/block/mq-deadline.c
+@@ -28,7 +28,7 @@
+  * See Documentation/block/deadline-iosched.rst
+  */
+ static const int read_expire = HZ / 2;  /* max time before a read is submitted. */
+-static const int write_expire = 5 * HZ; /* ditto for writes, these limits are SOFT! */
++static const int write_expire = HZ;     /* ditto for writes, these limits are SOFT! */
+ /*
+  * Time after which to dispatch lower priority requests even if higher
+  * priority requests are pending.

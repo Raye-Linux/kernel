@@ -1,0 +1,28 @@
+dm crypt: encrypt in place by default
+
+dm-crypt sends every read and write through its own kcryptd work
+queues before the crypto API, which is asynchronous already. On an
+encrypted laptop disk that double queueing costs latency and
+throughput. Turn on no_read_workqueue and no_write_workqueue for every
+mapping, as cryptsetup's --perf-no_read_workqueue and
+--perf-no_write_workqueue would.
+
+--- a/drivers/md/dm-crypt.c
++++ b/drivers/md/dm-crypt.c
+@@ -3264,6 +3264,16 @@
+ 			goto bad;
+ 	}
+ 
++	/*
++	 * Encrypt and decrypt in the context that submits or completes the
++	 * bio instead of going through the kcryptd queues first: the crypto
++	 * API is asynchronous already, so the extra queueing only adds
++	 * latency. Raye defaults to it; dm-crypt's optional arguments still
++	 * accept the flags, they just cannot turn them off.
++	 */
++	set_bit(DM_CRYPT_NO_READ_WORKQUEUE, &cc->flags);
++	set_bit(DM_CRYPT_NO_WRITE_WORKQUEUE, &cc->flags);
++
+ 	ret = crypt_ctr_cipher(ti, argv[0], argv[1]);
+ 	if (ret < 0)
+ 		goto bad;

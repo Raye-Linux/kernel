@@ -1,0 +1,25 @@
+kbuild: deb-pkg: build the -dbg package only on request
+
+CONFIG_DEBUG_INFO is on in Ubuntu's configuration, so bindeb-pkg
+builds a -dbg package: objcopy --only-keep-debug on every module, a
+package of some hundreds of megabytes, which build.sh then throws
+away. Make it wait for DEB_DEBUG_PKG in the environment.
+
+scripts/package/builddeb picks what to install from the package name in
+debian/control, so dropping the entry is enough for the work not to
+happen at all. The kernel image, its modules and the BTF information
+inside vmlinux are untouched: this is a packaging switch.
+
+From XanMod's 7.0 series.
+
+--- a/scripts/package/mkdebian
++++ b/scripts/package/mkdebian
+@@ -249,7 +249,7 @@
+ fi
+ fi
+ 
+-if is_enabled CONFIG_DEBUG_INFO; then
++if is_enabled CONFIG_DEBUG_INFO && [ "${DEB_DEBUG_PKG:-}" ]; then
+ cat <<EOF >> debian/control
+ 
+ Package: linux-image-${KERNELRELEASE}-dbg

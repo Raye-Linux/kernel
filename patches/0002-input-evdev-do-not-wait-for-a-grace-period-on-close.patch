@@ -1,0 +1,77 @@
+Input: evdev: do not wait for a grace period on close
+
+Closing an event device waited for an RCU grace period before
+returning. A session start, a logout or a VT switch closes dozens of
+them in a row, so those waits add up to a visible pause. Free the
+client from an RCU callback instead; nothing else changes.
+
+--- a/drivers/input/evdev.c
++++ b/drivers/input/evdev.c
+@@ -47,6 +47,7 @@
+ 	struct fasync_struct *fasync;
+ 	struct evdev *evdev;
+ 	struct list_head node;
++	struct rcu_head rcu;
+ 	enum input_clock_type clk_type;
+ 	bool revoked;
+ 	unsigned long *evmasks[EV_CNT];
+@@ -373,13 +374,29 @@
+ 	spin_unlock(&evdev->client_lock);
+ }
+ 
++static void evdev_free_client(struct rcu_head *head)
++{
++	struct evdev_client *client = container_of(head, struct evdev_client, rcu);
++	unsigned int i;
++
++	for (i = 0; i < EV_CNT; ++i)
++		bitmap_free(client->evmasks[i]);
++
++	kvfree(client);
++}
++
++/*
++ * Frees the client once readers are done with it. Waiting for that here
++ * (synchronize_rcu) made every close() of an event device take a grace
++ * period, and a session start or a VT switch closes dozens of them.
++ */
+ static void evdev_detach_client(struct evdev *evdev,
+ 				struct evdev_client *client)
+ {
+ 	spin_lock(&evdev->client_lock);
+ 	list_del_rcu(&client->node);
+ 	spin_unlock(&evdev->client_lock);
+-	synchronize_rcu();
++	call_rcu(&client->rcu, evdev_free_client);
+ }
+ 
+ static int evdev_open_device(struct evdev *evdev)
+@@ -432,7 +449,6 @@
+ {
+ 	struct evdev_client *client = file->private_data;
+ 	struct evdev *evdev = client->evdev;
+-	unsigned int i;
+ 
+ 	mutex_lock(&evdev->mutex);
+ 
+@@ -443,12 +459,6 @@
+ 	mutex_unlock(&evdev->mutex);
+ 
+ 	evdev_detach_client(evdev, client);
+-
+-	for (i = 0; i < EV_CNT; ++i)
+-		bitmap_free(client->evmasks[i]);
+-
+-	kvfree(client);
+-
+ 	evdev_close_device(evdev);
+ 
+ 	return 0;
+@@ -491,7 +501,6 @@
+ 
+  err_free_client:
+ 	evdev_detach_client(evdev, client);
+-	kvfree(client);
+ 	return error;
+ }
+ 

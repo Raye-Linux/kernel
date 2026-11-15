@@ -1,0 +1,16 @@
+work/
+out/
+__pycache__/
+.pytest_cache/
+# the XanMod LTS series extracted by xanmod_lts.py: derived from their git,
+# half a megabyte, regenerated in seconds. xanmod/manifest.txt IS versioned
+# -- it is the reviewed verdicts, and the chain refuses to build without it.
+xanmod/serie/
+
+# Run-time state of the chain and of its trigger, both written on the build
+# machine and meaningless anywhere else: xanmod/etat.txt is the last pair
+# (XanMod tag, Ubuntu version) that was looked at, xanmod/annonce.txt is the
+# news waiting to be read. Versioning either would make `git add -A` commit
+# one machine's moment as if it were the project's state.
+xanmod/etat.txt
+xanmod/annonce.txt

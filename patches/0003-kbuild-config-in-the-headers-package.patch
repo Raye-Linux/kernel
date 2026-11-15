@@ -1,0 +1,32 @@
+kbuild: put .config back in the headers package
+
+Ubuntu's own linux-headers-<version>-generic ships
+/usr/src/linux-headers-<version>/.config; the headers package this
+repository builds does not, because bindeb-pkg goes through
+scripts/package/install-extmod-build, which copies
+include/config/auto.conf and include/config/kernel.release and stops
+there. Out-of-tree modules that read .config directly, as several
+vendor and DKMS trees do, therefore find on Ubuntu's kernel a file
+they do not find on this one.
+
+Kbuild itself does not need it: scripts/Makefile.modinst reads
+CONFIG_MODULE_SIG_HASH and CONFIG_MODULE_SIG_KEY from auto.conf, which
+is already in the package. This only closes the difference with the
+kernel Raye mirrors. Nothing is added to the kernel and nothing runs
+differently; the file names the signing key's path, not the key, which
+auto.conf already names.
+
+From XanMod's 7.0 series.
+
+--- a/scripts/package/install-extmod-build
++++ b/scripts/package/install-extmod-build
+@@ -48,6 +48,9 @@
+ 	fi
+ } | tar -c -f - -T - | tar -xf - -C "${destdir}"
+ 
++# copy .config manually to be where it's expected to be
++cp "${KCONFIG_CONFIG}" "${destdir}/.config"
++
+ # When ${CC} and ${HOSTCC} differ, rebuild host programs using ${CC}.
+ #
+ # This caters to host programs that participate in Kbuild. objtool and

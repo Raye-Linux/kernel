@@ -1,0 +1,33 @@
+sched/fair: do not scale the base slice with the number of CPUs
+
+The fair scheduler multiplies its 0.7 ms base slice by 1 + log2 of the
+CPU count, capped at 8 CPUs: 2.8 ms on any laptop or desktop of the
+last years. A task that wakes up behind a CPU-bound one (the
+compositor, the audio thread or the mouse while a build or a game
+loads) can wait that long. Keep the slice at 0.7 ms.
+
+The value can still be changed at run time in
+/sys/kernel/debug/sched/tunable_scaling and base_slice_ns.
+
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -67,14 +67,16 @@
+  *   SCHED_TUNABLESCALING_LOG - scaled logarithmically, *1+ilog(ncpus)
+  *   SCHED_TUNABLESCALING_LINEAR - scaled linear, *ncpus
+  *
+- * (default SCHED_TUNABLESCALING_LOG = *(1+ilog(ncpus))
++ * Raye keeps the base slice at 0.70 msec whatever the number of CPUs:
++ * scaled, an 8-thread laptop gets 2.8 msec, and a task that wakes up
++ * behind a busy one (the compositor behind a build) waits that long.
+  */
+-unsigned int sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_LOG;
++unsigned int sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_NONE;
+ 
+ /*
+  * Minimal preemption granularity for CPU-bound tasks:
+  *
+- * (default: 0.70 msec * (1 + ilog(ncpus)), units: nanoseconds)
++ * (default: 0.70 msec, units: nanoseconds)
+  */
+ unsigned int sysctl_sched_base_slice			= 700000ULL;
+ static unsigned int normalized_sysctl_sched_base_slice	= 700000ULL;

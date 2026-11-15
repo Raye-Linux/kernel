@@ -1,0 +1,25 @@
+block: complete an I/O on the CPU that asked for it
+
+QUEUE_FLAG_SAME_FORCE on top of QUEUE_FLAG_SAME_COMP: the completion
+of a request goes back to the CPU that submitted it, not merely to one
+sharing its cache. Warmer cache on the way back, at the price of a
+completion that cannot be spread when one CPU submits most of the I/O.
+
+To measure with the two other block experiments, as a batch and then
+one at a time, and never together with blk-wbt-2ms.patch: with the four
+at once no measurement says which one acted.
+
+From XanMod's 7.0 series.
+
+--- a/include/linux/blkdev.h
++++ b/include/linux/blkdev.h
+@@ -671,7 +671,8 @@
+ 	QUEUE_FLAG_MAX
+ };
+ 
+-#define QUEUE_FLAG_MQ_DEFAULT	(1UL << QUEUE_FLAG_SAME_COMP)
++#define QUEUE_FLAG_MQ_DEFAULT	((1UL << QUEUE_FLAG_SAME_COMP) |		\
++				 (1UL << QUEUE_FLAG_SAME_FORCE))
+ 
+ void blk_queue_flag_set(unsigned int flag, struct request_queue *q);
+ void blk_queue_flag_clear(unsigned int flag, struct request_queue *q);

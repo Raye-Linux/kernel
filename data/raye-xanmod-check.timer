@@ -1,0 +1,12 @@
+[Unit]
+Description=Look for a new XanMod LTS series every day
+Documentation=https://github.com/Raye-Linux/kernel
+
+[Timer]
+OnCalendar=daily
+# a day missed (the machine was off) runs at the next boot, not never
+Persistent=true
+RandomizedDelaySec=2h
+
+[Install]
+WantedBy=timers.target

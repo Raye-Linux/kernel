@@ -1,0 +1,114 @@
+#!/bin/sh
+# Scheduler latency and frame pacing on this computer, for the kernel it
+# is running. Run it once on Ubuntu's kernel and once on the Raye kernel,
+# on mains power, in the same power mode, nothing else open:
+#
+#   sudo apt install rt-tests stress-ng gcc
+#   sudo ./game-bench                 # 3 rounds, about 25 minutes
+#   sudo ./game-bench --rounds 1      # about 8 minutes
+#   ./summary.py ~/raye-bench/*/      # the numbers
+#
+# Each run goes in ~/raye-bench/<kernel>-<date>/. With scx_lavd installed
+# (raye-scx), every round is done twice: the kernel's own scheduler, then
+# lavd, which is what game mode uses.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+rounds=3
+while [ $# -gt 0 ]; do
+    case $1 in
+        --rounds) rounds=$2; shift 2 ;;
+        *) echo "usage: game-bench [--rounds N]" >&2; exit 2 ;;
+    esac
+done
+[ "$(id -u)" = 0 ] || { echo "run it with sudo" >&2; exit 1; }
+for t in cyclictest stress-ng hackbench; do
+    command -v $t >/dev/null || { echo "missing $t: sudo apt install rt-tests stress-ng" >&2; exit 1; }
+done
+
+user=${SUDO_USER:-root}
+home=$(getent passwd "$user" | cut -d: -f6)
+out=$home/raye-bench/$(uname -r)-$(date +%Y%m%d-%H%M)
+mkdir -p "$out"
+
+# FRAME=<built frame.c> when this computer has no compiler
+frame=${FRAME:-$out/frame}
+[ -n "${FRAME:-}" ] || cc -O2 -o "$frame" "$here/frame.c" || { echo "need gcc for frame.c" >&2; exit 1; }
+
+# on mains: a mains supply online, or no battery at all (a desktop)
+on_ac() {
+    battery=no
+    for d in "${POWER_SUPPLY:-/sys/class/power_supply}"/*; do
+        [ -r "$d/type" ] || continue
+        case $(cat "$d/type") in
+            Mains) [ "$(cat "$d/online" 2>/dev/null)" = 1 ] && return 0 ;;
+            Battery) battery=yes ;;
+        esac
+    done
+    [ "$battery" = no ]
+}
+on_ac || echo "warning: on battery, numbers will not compare with a run on mains" >&2
+
+# what this run was made on
+{
+    echo "kernel     $(uname -r)"
+    echo "cmdline    $(cat /proc/cmdline)"
+    echo "cpu        $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2-)"
+    echo "cpus       $(nproc)"
+    echo "power mode $(powerprofilesctl get 2>/dev/null || echo unknown)"
+    echo "on mains   $(on_ac && echo yes || echo no)"
+    echo "cpufreq    $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver 2>/dev/null) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null) $(cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null)"
+    echo "thp        $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
+    echo "ntsync     $([ -e /dev/ntsync ] && echo yes || echo no)"
+    for d in /sys/block/*/queue/scheduler; do
+        dev=$(echo "$d" | cut -d/ -f4)
+        case $dev in loop*|ram*|zram*|sr*) continue ;; esac
+        echo "iosched    $dev $(cat "$d")"
+    done
+    sysctl kernel.split_lock_mitigate vm.max_map_count vm.swappiness 2>&1
+    grep PRETTY_NAME /etc/os-release
+} > "$out/system.txt"
+systemd-analyze > "$out/boot.txt" 2>&1 || true
+systemd-analyze blame 2>/dev/null | head -15 >> "$out/boot.txt" || true
+
+lavd_pid=
+lavd_stop() {
+    [ -z "$lavd_pid" ] || { kill "$lavd_pid" 2>/dev/null; wait "$lavd_pid" 2>/dev/null || true; }
+    lavd_pid=
+}
+trap lavd_stop EXIT INT TERM
+
+modes=eevdf
+command -v scx_lavd >/dev/null && modes="eevdf lavd"
+n=$(nproc)
+
+one() {  # one() <folder> <label> <hogs>
+    s=
+    if [ "$3" -gt 0 ]; then stress-ng --cpu "$3" --timeout 80s --quiet 2>/dev/null & s=$!; sleep 3; fi
+    cyclictest -p0 -t4 -i1000 -l20000 -q -h 50000 --histfile="$1/cyc-$2.hist" > "$1/cyc-$2.txt" 2>&1
+    "$frame" 4000 1200 > "$1/frame-$2.txt"
+    [ -z "$s" ] || { kill "$s" 2>/dev/null; wait "$s" 2>/dev/null || true; }
+    sleep 5
+}
+
+r=1
+while [ "$r" -le "$rounds" ]; do
+    for m in $modes; do
+        d=$out/$m-r$r
+        mkdir -p "$d"
+        echo "$(date +%T) round $r, $m"
+        if [ "$m" = lavd ]; then
+            scx_lavd > "$d/scx.log" 2>&1 & lavd_pid=$!
+            sleep 5
+            grep -q enabled /sys/kernel/sched_ext/state || { echo "scx_lavd did not attach, see $d/scx.log" >&2; lavd_stop; continue; }
+        fi
+        one "$d" idle 0
+        one "$d" load1x "$n"
+        one "$d" load2x $((2 * n))
+        for i in 1 2 3; do hackbench -s 512 -l 300 -g 8 -f 20 -P 2>&1 | grep Time; done > "$d/hackbench.txt"
+        lavd_stop
+    done
+    r=$((r + 1))
+done
+chown -R "$user" "$out"
+echo "done: $out"
+python3 "$here/summary.py" "$out"/*/ || true

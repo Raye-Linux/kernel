@@ -1,0 +1,25 @@
+[Unit]
+Description=Look whether XanMod's LTS series or Ubuntu's kernel has moved
+Documentation=https://github.com/Raye-Linux/kernel
+# It reads two web pages. Without this, a machine that boots before the
+# network is up records "cannot read XanMod's newest LTS tag (network?)" as
+# news, and announces a problem that does not exist.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Overridable so the chain can live elsewhere than this lab's share.
+Environment=RAYE_XANMOD_CHAIN=/srv/raye/kernel/xanmod-lts-update.sh
+# RAYE_NOTIFY must be an ABSOLUTE path; xanmod-check refuses a bare name,
+# because systemd runs ExecStart with a PATH that has no /usr/local/bin.
+EnvironmentFile=-/etc/default/raye-xanmod-check
+ExecStart=/srv/raye/kernel/xanmod-check
+# No `apply` here, ever, and no key material is reachable: the chain
+# stops at a reviewed manifest because three XanMod patches apply cleanly
+# while breaking module signing and the TPM sealing of the disk.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

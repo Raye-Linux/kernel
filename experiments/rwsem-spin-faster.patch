@@ -1,0 +1,35 @@
+locking: rwsem: spin longer before yielding the CPU
+
+rwsem_spin_on_owner() calls cpu_relax() on every turn of its wait.
+Skip it for the first thousand turns, so a lock held for a very short
+time is taken without going round the scheduler.
+
+The cost is real and has to be weighed, not assumed: on x86 cpu_relax()
+is the PAUSE instruction, which is what lets a hyperthread sibling use
+the core and lets the CPU drop its frequency. A thousand turns without
+it is a thousand turns of a hot loop, on a laptop on battery as much as
+on a desktop. To measure with hackbench and tests/bench/frame.c, and
+with power draw on a laptop, not only with throughput.
+
+From XanMod's 7.0 series.
+
+--- a/kernel/locking/rwsem.c
++++ b/kernel/locking/rwsem.c
+@@ -746,6 +746,7 @@
+ 	struct task_struct *new, *owner;
+ 	unsigned long flags, new_flags;
+ 	enum owner_state state;
++	int i = 0;
+ 
+ 	lockdep_assert_preemption_disabled();
+ 
+@@ -782,7 +783,8 @@
+ 			break;
+ 		}
+ 
+-		cpu_relax();
++		if (i++ > 1000)
++			cpu_relax();
+ 	}
+ 
+ 	return state;

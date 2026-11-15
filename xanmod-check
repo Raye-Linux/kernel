@@ -1,0 +1,85 @@
+#!/bin/sh
+# Wakes the XanMod LTS chain in `check` mode and makes its news REACHABLE.
+#
+#   ./xanmod-check            # the default: look, and say so only if something moved
+#   ./xanmod-check --montre   # print what the last run found, and exit
+#
+# Why this file exists at all, and why a bare timer would NOT have done.
+# `xanmod-lts-update.sh check` exits 0 whichever answer it has: a new XanMod
+# tag, a new Ubuntu kernel, or nothing at all. A timer running it nightly
+# would therefore succeed identically in every case, and the one line that
+# matters -- "MOVED: was X, now Y" -- would sit in the journal where nobody
+# reads it. That is the defect family this product has paid for a dozen
+# times: a command that succeeds without doing the work, or here, without
+# telling anyone. So the news has to leave a durable artefact.
+#
+# It never runs `apply`. The chain stops at a reviewed manifest on
+# purpose: three of XanMod's patches apply cleanly while breaking promises
+# Raye makes -- DEBUG_BUGVERBOSE=n removes the stop code from the crash
+# screen, and two setlocalversion patches move the module path, which
+# breaks module signing AND the TPM sealing of the disk. An unattended
+# build is not a convenience here, it is a way to ship a machine whose
+# encrypted disk will not open. A human says yes once per series bump.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+chaine=${RAYE_XANMOD_CHAIN:-$here/xanmod-lts-update.sh}
+annonce=${RAYE_XANMOD_ANNONCE:-$here/xanmod/annonce.txt}
+notifier=${RAYE_NOTIFY:-}
+
+if [ "${1:-}" = "--montre" ]; then
+    [ -r "$annonce" ] && cat "$annonce" || echo "nothing is waiting."
+    exit 0
+fi
+[ $# -eq 0 ] || { echo "usage: $0 [--montre]" >&2; exit 2; }
+
+# A chain that cannot run is a FAILURE, not news. Without this the unit
+# would go green forever on a renamed or deleted script, and the kernel
+# would silently stop being followed -- the exact shape of the 22 installer
+# QML tests that no package build ever ran.
+[ -x "$chaine" ] || { echo "xanmod-check: $chaine is missing or not executable" >&2; exit 1; }
+
+# An absolute path, or nothing. Measured in this lab: systemd and ssh
+# both run a command with a PATH that has no /usr/local/bin, so a bare
+# name is simply not found -- and the notifier's failure would be the
+# silence we are trying to remove.
+if [ -n "$notifier" ]; then
+    case $notifier in
+        /*) [ -x "$notifier" ] || { echo "xanmod-check: RAYE_NOTIFY=$notifier is not executable" >&2; exit 1; } ;;
+        *)  echo "xanmod-check: RAYE_NOTIFY must be an absolute path, got '$notifier'" >&2; exit 1 ;;
+    esac
+fi
+
+sortie=$("$chaine" check 2>&1) || true
+
+bouge=no
+printf '%s\n' "$sortie" | grep -q '^==> MOVED:' && bouge=oui
+printf '%s\n' "$sortie" | grep -q 'these preconditions are not met:' && bouge=oui
+
+mkdir -p "$(dirname "$annonce")"
+if [ "$bouge" = no ]; then
+    # Clear a stale announcement. An artefact left behind would tell him
+    # about the same kernel every day until he stopped believing it.
+    rm -f "$annonce"
+    exit 0
+fi
+
+{
+    printf 'Raye kernel: the XanMod LTS chain has something for you.\n'
+    printf 'Looked on %s.\n\n' "$(date -u '+%Y-%m-%d %H:%MZ')"
+    printf '%s\n' "$sortie"
+    printf '\nNothing was built and nothing was signed: run\n'
+    printf '    %s apply\n' "$chaine"
+    printf 'when you want it, after reviewing the series.\n'
+} > "$annonce.neuf"
+mv "$annonce.neuf" "$annonce"
+
+# A notifier that fails is not swallowed. The announcement file is
+# already written, so the news is not lost -- but if the one channel that
+# reaches him is broken, the unit going red is the only thing left that
+# says so. A silent `|| :` here would rebuild the silence on purpose.
+if [ -n "$notifier" ]; then
+    "$notifier" "Raye kernel: XanMod LTS moved" < "$annonce" \
+        || { echo "xanmod-check: $notifier failed; the news is in $annonce" >&2; exit 1; }
+fi
+exit 0

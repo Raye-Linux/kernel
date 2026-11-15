@@ -1,0 +1,246 @@
+Raye crash screen
+
+When the kernel panics, the screen turns night violet and shows the Raye
+crash picture: the eye and, set in Inter, the two sentences in English
+and in French. The picture is the mono boot logo
+(CONFIG_LOGO_LINUX_MONO_FILE, made by art/crash.py). Under it, in the
+console font, the help address and "Stop code: " with the panic
+description.
+
+When the picture does not fit the screen, the same sentences are drawn
+in the console font, French in code page 437 so the accents show. The
+font is fixed: Terminus 16x32 from 1280 pixels wide, VGA 8x16 below;
+the small print under the picture is always VGA 8x16.
+
+The boot logo is off by default (fb_logo_count 0), so the eye only shows
+on the crash screen; fbcon=logo-count:<n> still brings it back.
+
+--- a/drivers/gpu/drm/drm_panic.c
++++ b/drivers/gpu/drm/drm_panic.c
+@@ -77,24 +77,37 @@
+ 
+ #define PANIC_LINE(s) {.len = sizeof(s) - 1, .txt = s}
+ 
++/*
++ * Raye: the first PANIC_WORDS lines are what the Raye crash picture says
++ * (CONFIG_LOGO_LINUX_MONO_FILE, the eye and the same sentences in Inter).
++ * They are drawn only when the picture does not fit the screen. French is
++ * written in code page 437, the code page of the console fonts, so the
++ * accents show: 0x82 is e acute, 0x8a e grave.
++ */
++#define PANIC_WORDS 6
++
+ static struct drm_panic_line panic_msg[] = {
+-	PANIC_LINE("KERNEL PANIC!"),
++	PANIC_LINE("Raye ran into a problem and needs to restart."),
++	PANIC_LINE("Your files are safe. It restarts by itself."),
++	PANIC_LINE(""),
++	PANIC_LINE("Raye a rencontr\x82 un probl\x8a" "me et doit red\x82" "marrer."),
++	PANIC_LINE("Vos fichiers sont en s\x82" "curit\x82"
++		   ". L'ordinateur red\x82" "marre tout seul."),
+ 	PANIC_LINE(""),
+-	PANIC_LINE("Please reboot your computer."),
++	PANIC_LINE("Help / Aide : github.com/Raye-Linux/handbook"),
+ 	PANIC_LINE(""),
+-	PANIC_LINE(""), /* will be replaced by the panic description */
++	PANIC_LINE(""), /* will be replaced by "Stop code: " and the panic description */
+ };
+ 
+ static const size_t panic_msg_lines = ARRAY_SIZE(panic_msg);
+ 
++/* the Raye eye, for the screens that still draw an ASCII logo */
+ static const struct drm_panic_line logo_ascii[] = {
+-	PANIC_LINE("     .--.        _"),
+-	PANIC_LINE("    |o_o |      | |"),
+-	PANIC_LINE("    |:_/ |      | |"),
+-	PANIC_LINE("   //   \\ \\     |_|"),
+-	PANIC_LINE("  (|     | )     _"),
+-	PANIC_LINE(" /'\\_   _/`\\    (_)"),
+-	PANIC_LINE(" \\___)=(___/"),
++	PANIC_LINE("      .-~~~~~~~~-.      "),
++	PANIC_LINE("   .-'    .--.    '-.   "),
++	PANIC_LINE("  <      ( () )      >  "),
++	PANIC_LINE("   '-.    '--'    .-'   "),
++	PANIC_LINE("      '-~~~~~~~~-'      "),
+ };
+ 
+ static const size_t logo_ascii_lines = ARRAY_SIZE(logo_ascii);
+@@ -451,7 +464,9 @@
+ 	}
+ }
+ 
+-static void drm_panic_logo_rect(struct drm_rect *rect, const struct font_desc *font)
++/* Raye: only the QR code screen still uses these two */
++static void __maybe_unused drm_panic_logo_rect(struct drm_rect *rect,
++					      const struct font_desc *font)
+ {
+ 	if (logo_mono) {
+ 		drm_rect_init(rect, 0, 0, logo_mono->width, logo_mono->height);
+@@ -462,8 +477,10 @@
+ 	}
+ }
+ 
+-static void drm_panic_logo_draw(struct drm_scanout_buffer *sb, struct drm_rect *rect,
+-				const struct font_desc *font, u32 fg_color)
++static void __maybe_unused drm_panic_logo_draw(struct drm_scanout_buffer *sb,
++					      struct drm_rect *rect,
++					      const struct font_desc *font,
++					      u32 fg_color)
+ {
+ 	if (rect->x2 > sb->width || rect->y2 > sb->height)
+ 		return;
+@@ -476,36 +493,100 @@
+ 				   fg_color);
+ }
+ 
++/* Raye: the help line and the stop code in the secondary text colour */
++#define RAYE_PANIC_SECONDARY_COLOR 0xb9a8d6
++
++/*
++ * Raye: fixed fonts, both in code page 437 so the accents of the French
++ * lines show. Under the picture the lines are small print, VGA 8x16 like
++ * the picture's own text size; without the picture the sentences are in
++ * Terminus 16x32 from 1280 pixels wide, VGA 8x16 below.
++ */
++static const struct font_desc *drm_panic_user_font(struct drm_scanout_buffer *sb,
++						   bool large)
++{
++	const struct font_desc *font = NULL;
++
++	if (large && sb->width >= 1280)
++		font = find_font("TER16x32");
++	if (!font)
++		font = find_font("VGA8x16");
++	if (!font)
++		font = get_default_font(sb->width, sb->height, NULL, NULL);
++	return font;
++}
++
++/* Raye: centre @lines horizontally at height @y, cut at the screen bottom */
++static unsigned int drm_panic_draw_lines(struct drm_scanout_buffer *sb,
++					 const struct font_desc *font,
++					 const struct drm_panic_line *lines,
++					 unsigned int count, unsigned int y, u32 color)
++{
++	unsigned int width = min(get_max_line_len(lines, count) * font->width, sb->width);
++	unsigned int height = count * font->height;
++	struct drm_rect r;
++
++	if (y >= sb->height)
++		return y;
++	height = min(height, sb->height - y);
++	if (height < font->height)
++		return y + height;
++
++	r = DRM_RECT_INIT((sb->width - width) / 2, y, width, height);
++	draw_txt_rectangle(sb, font, lines, count, true, &r, color);
++	return y + height;
++}
++
+ static void draw_panic_screen_user(struct drm_scanout_buffer *sb)
+ {
+ 	u32 fg_color = drm_draw_color_from_xrgb8888(CONFIG_DRM_PANIC_FOREGROUND_COLOR,
+ 						    sb->format->format);
+ 	u32 bg_color = drm_draw_color_from_xrgb8888(CONFIG_DRM_PANIC_BACKGROUND_COLOR,
+ 						    sb->format->format);
+-	const struct font_desc *font = get_default_font(sb->width, sb->height, NULL, NULL);
+-	struct drm_rect r_screen, r_logo, r_msg;
+-	unsigned int msg_width, msg_height;
++	u32 dim_color = drm_draw_color_from_xrgb8888(RAYE_PANIC_SECONDARY_COLOR,
++						     sb->format->format);
++	const struct font_desc *font = drm_panic_user_font(sb, false);
++	const struct drm_panic_line *tail = panic_msg + PANIC_WORDS;
++	unsigned int tail_lines = panic_msg_lines - PANIC_WORDS;
++	unsigned int gap, block, y;
++	struct drm_rect r_screen, r_logo;
++	bool picture;
++
++	BUILD_BUG_ON(PANIC_WORDS >= ARRAY_SIZE(panic_msg));
+ 
+ 	if (!font)
+ 		return;
+ 
+ 	r_screen = DRM_RECT_INIT(0, 0, sb->width, sb->height);
+-	drm_panic_logo_rect(&r_logo, font);
++	gap = 2 * font->height;
+ 
+-	msg_width = min(get_max_line_len(panic_msg, panic_msg_lines) * font->width, sb->width);
+-	msg_height = min(panic_msg_lines * font->height, sb->height);
+-	r_msg = DRM_RECT_INIT(0, 0, msg_width, msg_height);
++	/* the picture says the words, if it fits with the lines under it */
++	picture = logo_mono && logo_mono->width <= sb->width &&
++		  logo_mono->height + gap + tail_lines * font->height <= sb->height;
++	if (!picture)
++		font = drm_panic_user_font(sb, true);
+ 
+-	/* Center the panic message */
+-	drm_rect_translate(&r_msg, (sb->width - r_msg.x2) / 2, (sb->height - r_msg.y2) / 2);
++	if (picture)
++		block = logo_mono->height + gap;
++	else
++		block = PANIC_WORDS * font->height;
++	block += tail_lines * font->height;
++	y = block < sb->height ? (sb->height - block) / 2 : 0;
+ 
+-	/* Fill with the background color, and draw text on top */
++	/* Fill with the background color, and draw on top */
+ 	drm_panic_fill(sb, &r_screen, bg_color);
+ 
+-	if (!drm_rect_overlap(&r_logo, &r_msg))
+-		drm_panic_logo_draw(sb, &r_logo, font, fg_color);
++	if (picture) {
++		r_logo = DRM_RECT_INIT((sb->width - logo_mono->width) / 2, y,
++				       logo_mono->width, logo_mono->height);
++		drm_panic_blit(sb, &r_logo, logo_mono->data,
++			       DIV_ROUND_UP(logo_mono->width, 8), 1, fg_color);
++		y += logo_mono->height + gap;
++	} else {
++		y = drm_panic_draw_lines(sb, font, panic_msg, PANIC_WORDS, y, fg_color);
++	}
+ 
+-	draw_txt_rectangle(sb, font, panic_msg, panic_msg_lines, true, &r_msg, fg_color);
++	drm_panic_draw_lines(sb, font, tail, tail_lines, y, dim_color);
+ }
+ 
+ /*
+@@ -894,6 +975,9 @@
+ 	}
+ }
+ 
++/* Raye: the last line reads "Stop code: <panic description>" */
++static char panic_stop_code[128];
++
+ static void drm_panic_set_description(const char *description)
+ {
+ 	u32 len;
+@@ -901,12 +985,13 @@
+ 	if (description) {
+ 		struct drm_panic_line *desc_line = &panic_msg[panic_msg_lines - 1];
+ 
+-		desc_line->txt = description;
+ 		len = strlen(description);
+ 		/* ignore the last newline character */
+ 		if (len && description[len - 1] == '\n')
+ 			len -= 1;
+-		desc_line->len = len;
++		desc_line->len = scnprintf(panic_stop_code, sizeof(panic_stop_code),
++					   "Stop code: %.*s", (int)len, description);
++		desc_line->txt = panic_stop_code;
+ 	}
+ }
+ 
+--- a/drivers/video/fbdev/core/fb_logo.c
++++ b/drivers/video/fbdev/core/fb_logo.c
+@@ -6,7 +6,11 @@
+ #include "fb_internal.h"
+ 
+ bool fb_center_logo __read_mostly;
+-int fb_logo_count __read_mostly = -1;
++/*
++ * Raye: the logo is the crash screen picture, so none at start-up;
++ * fbcon=logo-count:<n> still asks for it.
++ */
++int fb_logo_count __read_mostly;
+ 
+ static inline unsigned int safe_shift(unsigned int d, int n)
+ {

@@ -1,0 +1,75 @@
+# The XanMod LTS series, patch by patch, with what was MEASURED of each
+# against Ubuntu's kernel source. xanmod_lts.py reads this file before the
+# chain builds anything: a patch of XanMod's series that has no line here
+# is a patch nobody reviewed, and the chain stops and names it.
+#
+# Measured 2026-11-06, and every line of it was run, not read:
+#   XanMod LTS        6.18.60-xanmod1  (branch 6.18, tag; = linux-xanmod-lts
+#                                      on the EPYC host, 6.18.60-xanmod1-0)
+#   Ubuntu kernel     linux 7.0.0-43.43 from resolute-updates, rebuilt from
+#                     linux_7.0.0.orig.tar.gz (md5 415e5d4e..., as the .dsc
+#                     says) + linux_7.0.0-43.43.diff.gz, applied with
+#                     0 failed hunks and 0 fuzz
+#   How               patch -p1 --fuzz=0 --forward --batch, build.sh's own
+#                     flags, applied CUMULATIVELY in series order
+#
+# The three verdicts:
+#   applique       applies whole on Ubuntu's 7.0 tree, in series order
+#   deja-en-amont  Ubuntu already carries it; patch(1) refuses it by itself
+#                  ("Reversed (or previously applied) patch detected")
+#   conflit        does not apply. It is NOT applied with fuzz and NOT
+#                  trimmed to fit: see docs/xanmod-lts.md for each one
+#
+# `applique` says the text goes in. It does not say the kernel builds,
+# and it does not say Raye wants the patch -- most of these are refused for
+# reasons that have nothing to do with applying. docs/xanmod.md decides.
+#
+applique|XANMOD: x86/build: Add more CFLAGS optimizations
+applique|XANMOD: x86/build: Add LLVM polyhedral loop optimizer flags
+applique|XANMOD: kbuild: Add SMS-based software pipelining flags
+applique|XANMOD: kbuild: deb-pkg: Create -dbg when make DEB_DEBUG_PKG=1
+applique|kbuild: Re-add .config file required to sign external modules
+applique|XANMOD: fair: Set scheduler tunable latencies to unscaled
+conflit|XANMOD: sched: Add yield_type sysctl to reduce or disable sched_yield
+applique|XANMOD: block/mq-deadline: Increase write priority to improve responsiveness
+applique|XANMOD: block/mq-deadline: Disable front_merges by default
+applique|XANMOD: block: Set rq_affinity to force complete I/O requests on same CPU
+conflit|XANMOD: blk-wbt: Set wbt_default_latency_nsec() to 2msec
+applique|XANMOD: kconfig: add 500Hz timer interrupt kernel config option
+applique|XANMOD: vfs: Decrease rate at which vfs caches are reclaimed
+applique|XANMOD: mm: Raise max_map_count default value
+conflit|XANMOD: mm/vmscan: Reduce amount of swapping
+applique|XANMOD: sched/autogroup: Add kernel parameter and config option to enable/disable autogroup feature by default
+applique|XANMOD: cpufreq: tunes ondemand and conservative governor for performance
+applique|XANMOD: lib/kconfig.debug: disable default SYMBOLIC_ERRNAME and DEBUG_BUGVERBOSE
+applique|XANMOD: scripts/setlocalversion: remove '+' tag for git repo short version
+applique|XANMOD: scripts/setlocalversion: Move localversion* files to the end
+applique|XANMOD: x86/build: Prevent generating avx2 floating-point code
+applique|sched/wait: Do accept() in LIFO order for cache efficiency
+applique|firmware: Enable stateless firmware loading
+applique|locking: rwsem: spin faster
+conflit|drivers: initialize ata before graphics
+applique|ZEN: input/evdev: Use call_rcu when detaching client
+applique|ZEN: dm-crypt: Disable workqueues for crypto ops
+applique|tcp: Add a sysctl to skip tcp collapse processing when the receive buffer is full
+applique|netfilter: Add netfilter nf_tables fullcone support
+applique|netfilter: add xt_FLOWOFFLOAD target
+applique|extcon: Add driver for Steam Deck
+applique|hwmon: Add driver for Steam Deck's EC sensors
+applique|hwmon: steamdeck-hwmon: Add support for max battery level/rate
+applique|leds: steamdeck: Add support for Steam Deck LED
+applique|mfd: Add MFD core driver for Steam Deck
+applique|mfd: steamdeck: Expose controller board power in sysfs
+deja-en-amont|binder: turn into module
+deja-en-amont|binder: give binder_alloc its own debug mask file
+deja-en-amont|wait: allow to use __wake_up_pollfree() from GPL modules
+deja-en-amont|file: export file_close_fd() instead of close_fd_get_file()
+conflit|PCI: Enable overrides for missing ACS capabilities
+conflit|sysctl: add sysctl to disallow unprivileged CLONE_NEWUSER by default
+conflit|Fix merge [1/2]: sched/proxy: Yield the donor task
+applique|Fix merge [2/2]: sched/proxy: Yield the donor task
+applique|mm: Add working set protection for anon and clean file pages
+conflit|tcp_bbr: v3: update TCP 'bbr' congestion control module to BBRv3 [v6.18.33+]
+applique|x86/kconfig: more x86-64 ISA levels and uarches [v6.18.54+]
+conflit|XANMOD: Makefile: Move x86 instruction set selection to kernel-wide build [v6.18.54+]
+applique|x86/build/64: Fix kconfig recursive dependency
