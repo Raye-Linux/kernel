@@ -1,0 +1,271 @@
+drm/amd/display: add RGBA8888 surface pixel format support
+
+amdgpu_dm advertises DRM_FORMAT_RGBA8888 for its planes, but the DC
+surface_pixel_format enum only had the ARGB8888 and ABGR8888 variants.
+fill_dc_plane_info_and_addr() therefore fell through to the default
+case and rejected RGBA8888 with -EINVAL, even though the hardware
+supports it: the HUBP/DPP SURFACE_PIXEL_FORMAT field has a dedicated
+RGBA8888 encoding (value 9) next to ARGB8888 (value 8).
+
+Add SURFACE_PIXEL_FORMAT_GRPH_RGBA8888 and plumb it through:
+
+ - map DRM_FORMAT_RGBA8888 to the new format in the DM;
+ - program the dedicated register value 9 in the HUBP and DPP across
+   all DCN generations (no red/blue crossbar swap, unlike ABGR);
+ - treat it as a 32bpp graphics format everywhere else (bandwidth,
+   bytes-per-pixel, DCC and format-class helpers), identical to
+   ARGB8888.
+
+Closes: https://gitlab.freedesktop.org/drm/amd/-/work_items/5339
+Signed-off-by: Harry Wentland <harry.wentland@amd.com>
+
+Raye: a desktop that picks RGBA8888 for a plane (KWin does) gets every
+atomic commit refused on an AMD card, and the screen stays black or
+blinks while it retries; the kernel log says "Unsupported screen format
+RA24". Patch 0008 makes the colours right on DCE (Polaris and older).
+
+Author: Harry Wentland <harry.wentland@amd.com>, 2026-08-26.
+Link: https://github.com/getsolus/packages/blob/6ebce50a40de207848541fb155e6da4b8d4b8654/packages/l/linux-lts/files/patches/upstream/0001-drm-amd-display-add-RGBA8888-surface-pixel-format-su.patch
+That is the 6.18 form of the patch, without the DCN 4.2 files 7.0 does
+not have. Its hunks are unchanged here; only the line numbers moved.
+
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
+@@ -6220,6 +6220,9 @@
+ 	case DRM_FORMAT_ARGB8888:
+ 		plane_info->format = SURFACE_PIXEL_FORMAT_GRPH_ARGB8888;
+ 		break;
++	case DRM_FORMAT_RGBA8888:
++		plane_info->format = SURFACE_PIXEL_FORMAT_GRPH_RGBA8888;
++		break;
+ 	case DRM_FORMAT_XRGB2101010:
+ 	case DRM_FORMAT_ARGB2101010:
+ 		plane_info->format = SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010;
+--- a/drivers/gpu/drm/amd/display/dc/basics/dce_calcs.c
++++ b/drivers/gpu/drm/amd/display/dc/basics/dce_calcs.c
+@@ -2853,6 +2853,7 @@
+ 			break;
+ 		case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 		case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++		case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 		case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 		case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 		case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+@@ -2957,6 +2958,7 @@
+ 				break;
+ 			case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 			case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++			case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 			case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 			case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 			case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+--- a/drivers/gpu/drm/amd/display/dc/core/dc_resource.c
++++ b/drivers/gpu/drm/amd/display/dc/core/dc_resource.c
+@@ -763,6 +763,9 @@
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+ 		dal_pixel_format = PIXEL_FORMAT_ARGB8888;
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		dal_pixel_format = PIXEL_FORMAT_ARGB8888;
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 		dal_pixel_format = PIXEL_FORMAT_ARGB2101010;
+ 		break;
+@@ -5221,6 +5224,7 @@
+ 		return 16;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+--- a/drivers/gpu/drm/amd/display/dc/dc_hw_types.h
++++ b/drivers/gpu/drm/amd/display/dc/dc_hw_types.h
+@@ -176,6 +176,8 @@
+ 	SURFACE_PIXEL_FORMAT_GRPH_ARGB8888,
+ 	/*32 bpp swaped*/
+ 	SURFACE_PIXEL_FORMAT_GRPH_ABGR8888,
++	/*32 bpp, alpha in LSB*/
++	SURFACE_PIXEL_FORMAT_GRPH_RGBA8888,
+ 
+ 	SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010,
+ 	/*swaped*/
+--- a/drivers/gpu/drm/amd/display/dc/dce/dce_mem_input.c
++++ b/drivers/gpu/drm/amd/display/dc/dce/dce_mem_input.c
+@@ -591,6 +591,7 @@
+ 		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 		grph_depth = 2;
+ 		grph_format = 0;
+ 		break;
+--- a/drivers/gpu/drm/amd/display/dc/dce110/dce110_mem_input_v.c
++++ b/drivers/gpu/drm/amd/display/dc/dce110/dce110_mem_input_v.c
+@@ -381,6 +381,7 @@
+ 			break;
+ 		case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 		case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++		case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 			grph_depth = 2;
+ 			grph_format = 0;
+ 			break;
+--- a/drivers/gpu/drm/amd/display/dc/dml/calcs/dcn_calcs.c
++++ b/drivers/gpu/drm/amd/display/dc/dml/calcs/dcn_calcs.c
+@@ -231,6 +231,7 @@
+ 		return dcn_bw_rgb_sub_16;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+--- a/drivers/gpu/drm/amd/display/dc/dpp/dcn10/dcn10_dpp.c
++++ b/drivers/gpu/drm/amd/display/dc/dpp/dcn10/dcn10_dpp.c
+@@ -337,6 +337,9 @@
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+ 		pixel_format = 8;
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		pixel_format = 9;
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 		pixel_format = 10;
+--- a/drivers/gpu/drm/amd/display/dc/dpp/dcn20/dcn20_dpp.c
++++ b/drivers/gpu/drm/amd/display/dc/dpp/dcn20/dcn20_dpp.c
+@@ -138,6 +138,9 @@
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+ 		pixel_format = 8;
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		pixel_format = 9;
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 		pixel_format = 10;
+--- a/drivers/gpu/drm/amd/display/dc/dpp/dcn201/dcn201_dpp.c
++++ b/drivers/gpu/drm/amd/display/dc/dpp/dcn201/dcn201_dpp.c
+@@ -85,6 +85,9 @@
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+ 		pixel_format = 8;
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		pixel_format = 9;
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 		pixel_format = 10;
+--- a/drivers/gpu/drm/amd/display/dc/dpp/dcn30/dcn30_dpp.c
++++ b/drivers/gpu/drm/amd/display/dc/dpp/dcn30/dcn30_dpp.c
+@@ -263,6 +263,9 @@
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+ 		pixel_format = 8;
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		pixel_format = 9;
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 		pixel_format = 10;
+--- a/drivers/gpu/drm/amd/display/dc/dpp/dcn401/dcn401_dpp.c
++++ b/drivers/gpu/drm/amd/display/dc/dpp/dcn401/dcn401_dpp.c
+@@ -97,6 +97,9 @@
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
+ 		pixel_format = 8;
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		pixel_format = 9;
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 		pixel_format = 10;
+--- a/drivers/gpu/drm/amd/display/dc/hubbub/dcn10/dcn10_hubbub.c
++++ b/drivers/gpu/drm/amd/display/dc/hubbub/dcn10/dcn10_hubbub.c
+@@ -760,6 +760,7 @@
+ 		return true;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 		*bytes_per_element = 4;
+--- a/drivers/gpu/drm/amd/display/dc/hubbub/dcn20/dcn20_hubbub.c
++++ b/drivers/gpu/drm/amd/display/dc/hubbub/dcn20/dcn20_hubbub.c
+@@ -147,6 +147,7 @@
+ 		return true;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_RGB111110_FIX:
+--- a/drivers/gpu/drm/amd/display/dc/hubbub/dcn401/dcn401_hubbub.c
++++ b/drivers/gpu/drm/amd/display/dc/hubbub/dcn401/dcn401_hubbub.c
+@@ -665,6 +665,7 @@
+ 		return true;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+--- a/drivers/gpu/drm/amd/display/dc/hubp/dcn10/dcn10_hubp.c
++++ b/drivers/gpu/drm/amd/display/dc/hubp/dcn10/dcn10_hubp.c
+@@ -271,6 +271,10 @@
+ 		REG_UPDATE(DCSURF_SURFACE_CONFIG,
+ 				SURFACE_PIXEL_FORMAT, 8);
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		REG_UPDATE(DCSURF_SURFACE_CONFIG,
++				SURFACE_PIXEL_FORMAT, 9);
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+--- a/drivers/gpu/drm/amd/display/dc/hubp/dcn20/dcn20_hubp.c
++++ b/drivers/gpu/drm/amd/display/dc/hubp/dcn20/dcn20_hubp.c
+@@ -472,6 +472,10 @@
+ 		REG_UPDATE(DCSURF_SURFACE_CONFIG,
+ 				SURFACE_PIXEL_FORMAT, 8);
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		REG_UPDATE(DCSURF_SURFACE_CONFIG,
++				SURFACE_PIXEL_FORMAT, 9);
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+--- a/drivers/gpu/drm/amd/display/dc/hubp/dcn35/dcn35_hubp.c
++++ b/drivers/gpu/drm/amd/display/dc/hubp/dcn35/dcn35_hubp.c
+@@ -94,6 +94,10 @@
+ 		REG_UPDATE(DCSURF_SURFACE_CONFIG,
+ 				SURFACE_PIXEL_FORMAT, 8);
+ 		break;
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
++		REG_UPDATE(DCSURF_SURFACE_CONFIG,
++				SURFACE_PIXEL_FORMAT, 9);
++		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR2101010_XR_BIAS:
+--- a/drivers/gpu/drm/amd/display/dc/hwss/dce/dce_hwseq.c
++++ b/drivers/gpu/drm/amd/display/dc/hwss/dce/dce_hwseq.c
+@@ -212,6 +212,7 @@
+ 	switch (format) {
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 		return true;
+ 	default:
+ 		return false;
+--- a/drivers/gpu/drm/amd/display/dc/hwss/dce110/dce110_hwseq.c
++++ b/drivers/gpu/drm/amd/display/dc/hwss/dce110/dce110_hwseq.c
+@@ -263,6 +263,7 @@
+ 		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB8888:
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR8888:
++	case SURFACE_PIXEL_FORMAT_GRPH_RGBA8888:
+ 		prescale_params->scale = 0x2020;
+ 		break;
+ 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB2101010:

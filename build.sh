@@ -24,7 +24,8 @@
 #
 # REV is the Raye build of a given Ubuntu version, the N in +rayeN. Raise
 # it when the kernel changes on the same Ubuntu version, or apt sees
-# nothing new to install. 1 was the GCC build without BORE.
+# nothing new to install. 1 was the GCC build without BORE, 3 the first
+# with the AMD RGBA8888 fix (raye-base's raye-amd-cursor knows that number).
 #
 # Output: ./out/*.deb
 
@@ -35,7 +36,7 @@ keys=${KEYS:?"KEYS: folder with the raye-mok and raye-boot key pairs"}
 jobs=${JOBS:-$(nproc)}
 work=${WORK:-$here/work}
 flavour=${FLAVOUR:-raye}
-rev=${REV:-2}
+rev=${REV:-3}
 out=$here/out
 abi=${version%.*}                 # 7.0.0-42
 picture=$here/assets/raye-crash.pbm
