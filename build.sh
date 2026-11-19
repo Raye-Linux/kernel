@@ -1,7 +1,8 @@
 #!/bin/sh
 # Builds linux-image-<version>-raye: Ubuntu's kernel, same version and
-# same configuration, with the Raye crash screen. Signed with the Raye
-# MOK key so it boots with Secure Boot once that key is enrolled.
+# same configuration, with the Raye crash screen and the BORE scheduler,
+# built with Clang and LLD (ThinLTO). Signed with the Raye MOK key so it
+# boots with Secure Boot once that key is enrolled.
 #
 # Runs as root in a resolute system (a chroot is fine) with deb-src:
 #
@@ -21,6 +22,10 @@
 #                                    (default raye; lower case and digits)
 # Paths in the two lists are separated by spaces.
 #
+# REV is the Raye build of a given Ubuntu version, the N in +rayeN. Raise
+# it when the kernel changes on the same Ubuntu version, or apt sees
+# nothing new to install. 1 was the GCC build without BORE.
+#
 # Output: ./out/*.deb
 
 set -eu
@@ -30,6 +35,7 @@ keys=${KEYS:?"KEYS: folder with the raye-mok and raye-boot key pairs"}
 jobs=${JOBS:-$(nproc)}
 work=${WORK:-$here/work}
 flavour=${FLAVOUR:-raye}
+rev=${REV:-2}
 out=$here/out
 abi=${version%.*}                 # 7.0.0-42
 picture=$here/assets/raye-crash.pbm
@@ -38,12 +44,17 @@ logo_file=drivers/video/logo/logo_raye_crash_mono.pbm
 
 say() { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
 die() { echo "build.sh: $*" >&2; exit 1; }
+# the clang-<n> a source package builds with, one number per line
+clang_of() { sed -n 's/.*[ ,]clang-\([0-9][0-9]*\):native.*/\1/p' "$1" | sort -u; }
 
 case $version in
     *[!0-9a-z.+~-]*|'') die "odd version: $version" ;;
 esac
 case $flavour in
     *[!a-z0-9]*|'') die "FLAVOUR: lower case letters and digits only" ;;
+esac
+case $rev in
+    *[!0-9]*|'') die "REV: a number" ;;
 esac
 [ -r "$keys/raye-mok.key" ] && [ -r "$keys/raye-mok.pem" ] &&
     [ -r "$keys/raye-boot.key" ] && [ -r "$keys/raye-boot.pem" ] ||
@@ -119,6 +130,21 @@ fi
 # the crash screen picture, as the mono logo
 cp "$picture" "$logo_file"
 
+# Clang, LLD and the LLVM tools, all of the version Ubuntu's own source
+# already uses for its Rust bindings. LLVM=-<n> goes on every make: a
+# make without it would quietly configure, or build, with GCC.
+# Read from the .dsc: bindeb-pkg writes its own debian/control over
+# Ubuntu's, so in a tree built once that file no longer says.
+dsc=$work/linux_$version.dsc
+clang=$(clang_of "$dsc")
+case $clang in
+    *[!0-9]*|'') die "cannot tell which clang $dsc asks for: '$clang'" ;;
+esac
+# sbsign is not a build dependency of the source: it signs the image below
+DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+    "clang-$clang" "lld-$clang" "llvm-$clang" sbsigntool >/dev/null
+llvm=LLVM=-$clang
+
 say "Configuration: Ubuntu generic + Raye"
 apt-get download -q "linux-modules-$abi-generic"
 dpkg-deb --fsys-tarfile linux-modules-"$abi"-generic_*.deb |
@@ -134,7 +160,7 @@ scripts/config --set-str MODULE_SIG_KEY certs/raye-signing.pem \
                --set-str SYSTEM_TRUSTED_KEYS certs/raye-mok.pem \
                --set-str SYSTEM_REVOCATION_KEYS "" \
                --set-str LOGO_LINUX_MONO_FILE "$logo_file"
-make -s olddefconfig
+make -s "$llvm" olddefconfig
 
 # olddefconfig drops an option whose dependencies are missing, quietly;
 # check every option the fragments set (the last fragment wins)
@@ -158,7 +184,18 @@ grep -qxF "CONFIG_LOGO_LINUX_MONO_FILE=\"$logo_file\"" .config ||
 say "Building (this takes a while)"
 rm -f "$work"/linux-image-*-"$flavour"_*.deb "$work"/linux-image-*-"$flavour"-dbg_*.deb \
       "$work"/linux-headers-*-"$flavour"_*.deb
-make -s -j"$jobs" bindeb-pkg LOCALVERSION="-$flavour" KDEB_PKGVERSION="$version+${flavour}1"
+# HAVE_XXHASH=n: objtool builds its livepatch commands when libxxhash-dev
+# happens to be installed, and Ubuntu's klp-checksum.c does not compile
+# then (it is not in the source's build-depends); nothing here needs them
+make -s -j"$jobs" "$llvm" HAVE_XXHASH=n bindeb-pkg LOCALVERSION="-$flavour" KDEB_PKGVERSION="$version+$flavour$rev"
+
+# what /proc/version will say; the .config could read Clang while the
+# objects came from GCC if LLVM= got lost on the way to debian/rules
+compiler=$(sed -n 's/^#define LINUX_COMPILER[[:space:]]*"\(.*\)"$/\1/p' include/generated/compile.h)
+case $compiler in
+    *"clang version $clang."*LLD*) say "Built with $compiler" ;;
+    *) die "not built with clang $clang and LLD: '$compiler'" ;;
+esac
 
 say "Signing the kernel and its modules for Secure Boot"
 # Ubuntu's modules_install signs a module only if debian/scripts/sign-module

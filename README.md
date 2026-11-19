@@ -1,7 +1,8 @@
 # Raye kernel
 
 Ubuntu's kernel, same version and configuration, with a few changes for
-desktops and laptops and the Raye crash screen: when the kernel panics, the
+desktops and laptops: the BORE scheduler, a build with Clang and ThinLTO
+(`docs/bore-clang.md`), and the Raye crash screen: when the kernel panics, the
 screen turns night violet and shows the Raye eye and a short message, in
 English and French, saying that Raye has to restart and that your files
 are safe.
@@ -17,6 +18,8 @@ are safe.
 As root, in an Ubuntu resolute system with deb-src enabled:
 
     KEYS=/path/to/keys ./build.sh 7.0.0-43.43
+
+It installs the Clang, LLD and LLVM version Ubuntu's source asks for.
 
 `KEYS` is the folder with the signing keys; they are never in this
 repository.

@@ -1,0 +1,17 @@
+ubuntu: igh-ecat: ask for -Wmaybe-uninitialized only where it exists
+
+The EtherCAT master Ubuntu carries passes -Wmaybe-uninitialized to the
+compiler unconditionally. Clang has no such warning and the kernel
+builds with -Werror=unknown-warning-option, so every file of the module
+fails to compile with Clang. Ask through cc-option; GCC builds keep the
+warning as before.
+
+--- a/ubuntu/igh-ecat/master/Makefile
++++ b/ubuntu/igh-ecat/master/Makefile
+@@ -1,5 +1,5 @@
+ ccflags-y := -I$(src)/../ \
+-	-Wmaybe-uninitialized
++	$(call cc-option,-Wmaybe-uninitialized)
+ 
+ obj-$(CONFIG_IGH_ECAT) += ec_master.o
+ 
