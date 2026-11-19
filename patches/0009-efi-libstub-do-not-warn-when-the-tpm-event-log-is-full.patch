@@ -1,0 +1,42 @@
+efi/libstub: do not warn when the TPM event log is full
+
+The stub measures the kernel command line before it parses it, so the
+"quiet" option cannot hide what that measurement prints. On machines
+whose firmware event log has filled up, HashLogExtendEvent() returns
+EFI_VOLUME_FULL and every boot starts with
+
+  EFI stub: WARNING: Failed to measure data for event 1: 0x800000000000000b
+
+over the firmware logo. That status means the PCR was extended and only
+the log entry is missing, so nothing is wrong with the measurement.
+Print it at debug level (efi=debug) and keep the warning for every
+other failure.
+
+--- a/drivers/firmware/efi/libstub/efi-stub-helper.c
++++ b/drivers/firmware/efi/libstub/efi-stub-helper.c
+@@ -235,6 +235,8 @@
+ 	efi_cc_event_t		cc_data;
+ };
+ 
++#define EFI_VOLUME_FULL		(11 | (1UL << (BITS_PER_LONG-1)))
++
+ struct efistub_measured_event {
+ 	union efistub_event	event_data;
+ 	TCG_PCClientTaggedEvent tagged_event __packed;
+@@ -316,6 +318,16 @@
+ 	if (status == EFI_SUCCESS)
+ 		return EFI_SUCCESS;
+ 
++	/*
++	 * The PCR was extended, only the firmware's event log is full. This
++	 * is printed before "quiet" is parsed, so keep it out of the boot.
++	 */
++	if (status == EFI_VOLUME_FULL) {
++		efi_debug("Event log full, data for event %d measured but not logged\n",
++			  event);
++		return status;
++	}
++
+ fail:
+ 	efi_warn("Failed to measure data for event %d: 0x%lx\n", event, status);
+ 	return status;
